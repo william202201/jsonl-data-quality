@@ -1,0 +1,32 @@
+{
+  "dataset": "alpaca_data_zh_51k.json (ymcui/Chinese-LLaMA-Alpaca), converted to JSONL",
+  "rules": "examples/rules_alpaca_zh.json",
+  "command": "python -m jsonl_quality --input data/alpaca_zh_51k.jsonl --rules examples/rules_alpaca_zh.json --output outputs/alpaca_zh",
+  "environment": {
+    "python": "3.13.16",
+    "platform": "Linux x86_64",
+    "cpus": 2,
+    "note": "cloud Linux container; timings on other machines will differ"
+  },
+  "runs_seconds": [
+    5.4026,
+    5.1892,
+    5.0661,
+    5.6295,
+    5.2047
+  ],
+  "median_seconds": 5.2,
+  "total_lines": 51179,
+  "parsed_records": 51179,
+  "invalid_lines": 0,
+  "clean_records": 50997,
+  "problem_lines": 182,
+  "total_issues": 182,
+  "issues_by_code": {
+    "conflicting_answer": 12,
+    "echo_response": 141,
+    "missing_field": 28,
+    "too_short": 1
+  },
+  "date": "2026-10-19"
+}

@@ -1,10 +1,20 @@
 # JSONL 数据质检脚本
 
-读取 JSONL 数据集，按可配置规则检查字段缺失、类型错误、重复记录和长度异常，输出带文件名与行号的 CSV 问题清单，以及 JSON、Markdown 和离线 HTML 汇总。
+读取 JSONL 数据集，按可配置规则检查字段缺失、类型错误、重复记录和长度异常，并针对大模型训练数据检查同题多答、复读问题和 AI 套话，输出带文件名与行号的 CSV 问题清单，以及 JSON、Markdown 和离线 HTML 汇总。
 
-这是使用**模拟数据**的个人项目，创建于 2026-10。适合展示 Python 数据处理、数据标注质检和批处理能力，不代表实际雇佣经历。
+个人项目，创建于 2026-10。内置示例为模拟数据，另用公开中文指令数据集做了真实规模测试。
 
 ![质检结果预览](docs/report.png)
+
+## 真实数据实测
+
+在 5.1 万条公开中文指令微调数据（Alpaca 中文版）上运行：
+
+| 记录数 | 问题行 | 同题多答 | 复读问题 | 空回答 | 耗时（5 次中位数） |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 51,179 | 182（0.36%） | 12 | 141 | 28 | 5.2 秒 |
+
+复现命令、问题清单和规则调整过程见 [docs/benchmark-alpaca-zh.md](docs/benchmark-alpaca-zh.md)。
 
 ## 一条命令运行
 
@@ -32,6 +42,10 @@ python -m jsonl_quality --input my_data.jsonl --rules my_rules.json --fail-on-is
 # 可选安装控制台命令
 python -m pip install -e .
 jsonl-quality --input examples/sample.jsonl
+
+# Alpaca 格式（instruction / input / output）并开启大模型数据检查
+python scripts/download_alpaca_zh.py
+python -m jsonl_quality --input data/alpaca_zh_51k.jsonl --rules examples/rules_alpaca_zh.json --output outputs/alpaca_zh
 
 # 运行测试
 python -m unittest discover -s tests -v
@@ -81,6 +95,29 @@ python -m unittest discover -s tests -v
 - `enum` 用于标签白名单。未配置的额外字段允许存在。未知配置项会报错，避免拼写错误被静默忽略。
 - `duplicate_key_fields` 可以组成复合业务键。只对字段存在且类型正确的记录建索引。
 - `content_fields` 指定用于判断内容重复的字段；默认做 NFKC、连续空白折叠与大小写折叠。关闭 `normalize_content` 后使用原始值。长度检查始终使用原始字段。
+- `allow_blank: true` 允许字符串字段为空，如 Alpaca 格式里没有上下文时 `input` 为 `""`。
+
+### 大模型数据检查（可选）
+
+在规则里加入 `content_checks` 开启，示例见 [`examples/rules_alpaca_zh.json`](examples/rules_alpaca_zh.json)：
+
+```json
+"content_checks": {
+  "prompt_fields": ["instruction", "input"],
+  "response_field": "output",
+  "conflicting_answer": true,
+  "echo_response": true,
+  "ai_boilerplate": true,
+  "min_cjk_ratio": 0.2
+}
+```
+
+- `conflicting_answer`：问题相同、回答不同，配对标出首条位置，交给人工裁定。已被判为内容重复的行不重复计数。
+- `echo_response`：回答与问题或输入完全相同（保留大小写比较）。
+- `ai_boilerplate`：含“作为一个 AI 语言模型”等模板化表述。
+- `min_cjk_ratio`：中文问题却得到几乎全英文的回答，疑似未翻译；问题要求英文输出、或回答是代码时不判。不配置则关闭。
+
+这些是启发式复核线索，不判断答案是否正确。
 
 ## 问题代码与计数口径
 
@@ -92,6 +129,10 @@ python -m unittest discover -s tests -v
 | `invalid_enum` | 标签不在配置白名单中 |
 | `duplicate_id` | 业务键已出现 |
 | `duplicate_content` | 所选内容字段相同或规范化后相同 |
+| `conflicting_answer` | 问题相同但回答不同（需开启 `content_checks`） |
+| `echo_response` | 回答照抄问题或输入（需开启 `content_checks`） |
+| `ai_boilerplate` | 回答含 AI 模板化表述（需开启 `content_checks`） |
+| `low_cjk_ratio` | 中文问题配几乎全英文回答（需配置 `min_cjk_ratio`） |
 | `invalid_json` | JSON 语法错误、重复对象键、非有限数或过深嵌套 |
 | `invalid_utf8` | 行无法以 UTF-8 解码 |
 | `not_object` | JSON 顶层不是对象 |
@@ -124,8 +165,8 @@ JSONL 物理行 → 有界字节读取 → 严格 JSON 对象解析
 
 默认每行最多 4 MiB（含换行），可用 `--max-line-bytes` 修改。超长行会分块跳过，下一行继续检测。重复指纹写入临时 SQLite，避免把全部数据或指纹集合放进 Python 内存；磁盘占用随唯一记录数增长。报告预览只保留前 12 个问题项。SHA-256 存在理论碰撞概率，未对超大数据集做规模性能承诺。
 
-结构检查不评判答案真实性、语义一致性、版权或训练价值，不做近似语义去重。输入文件的读取顺序决定重复的“首条”归属。
+结构检查与大模型数据检查都不评判答案真实性、语义一致性、版权或训练价值，不做近似语义去重。输入文件的读取顺序决定重复的“首条”归属。
 
-本地 16 项测试覆盖正常输入、跨文件重复、Unicode 长度边界、损坏行继续扫描、有界超长行、空文件、嵌套字段、配置错误、退出码及 CSV 转义。GitHub Actions 在 Python 3.11/3.13 运行测试与示例，并上传结果。
+本地 20 项测试覆盖正常输入、跨文件重复、Unicode 长度边界、损坏行继续扫描、有界超长行、空文件、嵌套字段、配置错误、退出码、CSV 转义，以及同题多答、复读、AI 套话和未翻译检查的正反例。GitHub Actions 在 Python 3.11/3.13 运行测试与示例，并上传结果。
 
-简历表述和面试演示见 [`docs/interview.md`](docs/interview.md)。MIT License.
+项目讲解与设计取舍见 [`docs/walkthrough.md`](docs/walkthrough.md)。MIT License.
