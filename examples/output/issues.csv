@@ -1,0 +1,15 @@
+﻿file,line,code,field,message,first_file,first_line
+sample.jsonl,81,missing_field,output,"Required value is absent, null or blank",,
+sample.jsonl,82,missing_field,input,"Required value is absent, null or blank",,
+sample.jsonl,83,invalid_type,input,Expected string,,
+sample.jsonl,84,too_short,input,Length 1 < 5,,
+sample.jsonl,85,too_long,input,Length 2100 > 2000,,
+sample.jsonl,86,invalid_enum,label,Value is outside configured enum,,
+sample.jsonl,87,duplicate_id,id,Different complete record; later occurrence refers to first occurrence,sample.jsonl,1
+sample.jsonl,88,duplicate_content,"input,output",Different complete record; later occurrence refers to first occurrence,sample.jsonl,2
+sample.jsonl,89,duplicate_content,"input,output",Different complete record; later occurrence refers to first occurrence,sample.jsonl,3
+sample.jsonl,90,invalid_json,,"Malformed JSON, duplicate object key, non-finite number or excessive nesting",,
+sample.jsonl,91,not_object,,Each line must be a JSON object,,
+sample.jsonl,92,blank_line,,Blank JSONL physical line,,
+sample.jsonl,93,invalid_json,,"Malformed JSON, duplicate object key, non-finite number or excessive nesting",,
+sample.jsonl,94,invalid_json,,"Malformed JSON, duplicate object key, non-finite number or excessive nesting",,

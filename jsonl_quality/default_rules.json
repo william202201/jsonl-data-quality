@@ -1,0 +1,11 @@
+{
+  "fields": {
+    "id": {"type": "string", "required": true, "min_length": 1, "max_length": 80},
+    "input": {"type": "string", "required": true, "min_length": 5, "max_length": 2000},
+    "output": {"type": "string", "required": true, "min_length": 5, "max_length": 4000},
+    "label": {"type": "string", "required": false, "enum": ["问答", "摘要", "分类"]}
+  },
+  "duplicate_key_fields": ["id"],
+  "content_fields": ["input", "output"],
+  "normalize_content": true
+}

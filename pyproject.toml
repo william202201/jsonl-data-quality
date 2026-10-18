@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jsonl-data-quality"
+version = "1.0.0"
+description = "Streaming JSONL schema, duplicate and length checks with CSV audit output"
+requires-python = ">=3.11"
+dependencies = []
+license = "MIT"
+
+[project.scripts]
+jsonl-quality = "jsonl_quality.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["jsonl_quality*"]
+
+[tool.setuptools.package-data]
+jsonl_quality = ["default_rules.json"]

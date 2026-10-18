@@ -1,0 +1,75 @@
+{
+  "input_files": 1,
+  "total_lines": 94,
+  "parsed_records": 89,
+  "invalid_lines": 5,
+  "problem_lines": 14,
+  "clean_records": 80,
+  "total_issues": 14,
+  "issues_by_code": {
+    "blank_line": 1,
+    "duplicate_content": 2,
+    "duplicate_id": 1,
+    "invalid_enum": 1,
+    "invalid_json": 3,
+    "invalid_type": 1,
+    "missing_field": 2,
+    "not_object": 1,
+    "too_long": 1,
+    "too_short": 1
+  },
+  "files": [
+    {
+      "file": "sample.jsonl",
+      "total_lines": 94,
+      "parsed_records": 89,
+      "invalid_lines": 5,
+      "problem_lines": 14,
+      "clean_records": 80,
+      "total_issues": 14
+    }
+  ],
+  "max_line_bytes": 4194304,
+  "duplicate_index": "temporary SQLite; SHA-256 fingerprints; later occurrences only",
+  "length_unit": "Unicode code points for strings; items for arrays; not tokens or bytes",
+  "rules": {
+    "fields": {
+      "id": {
+        "type": "string",
+        "required": true,
+        "min_length": 1,
+        "max_length": 80
+      },
+      "input": {
+        "type": "string",
+        "required": true,
+        "min_length": 5,
+        "max_length": 2000
+      },
+      "output": {
+        "type": "string",
+        "required": true,
+        "min_length": 5,
+        "max_length": 4000
+      },
+      "label": {
+        "type": "string",
+        "required": false,
+        "enum": [
+          "问答",
+          "摘要",
+          "分类"
+        ]
+      }
+    },
+    "duplicate_key_fields": [
+      "id"
+    ],
+    "content_fields": [
+      "input",
+      "output"
+    ],
+    "normalize_content": true
+  },
+  "elapsed_seconds": 0.0051
+}
