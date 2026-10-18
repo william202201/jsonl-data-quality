@@ -9,12 +9,32 @@ import os
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
+import re
 from time import perf_counter
 import unicodedata
 
 MISSING = object()
 CSV_FIELDS = ["file", "line", "code", "field", "message", "first_file", "first_line"]
 TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict}
+CONTENT_CHECK_KEYS = {"prompt_fields", "response_field", "conflicting_answer", "echo_response", "ai_boilerplate", "min_cjk_ratio"}
+# Template phrases that usually mean a model-generated answer slipped into training data unedited.
+BOILERPLATE = re.compile(r"作为一?[个名]?(人工智能|AI)(语言)?(模型|助手)|我(只)?是一[个名](人工智能|AI)(语言)?(模型|助手)|as an ai language model", re.IGNORECASE)
+CJK = re.compile(r"[一-鿿]")
+LATIN = re.compile(r"[A-Za-z]")
+# Code answers are legitimately mostly ASCII, so they are excluded from the CJK-ratio check.
+CODE_HINT = re.compile(r"```|^\s*(def |class |import |from \S+ import|#include|function |public |SELECT |INSERT |<\w+[ >])|=>|\{\s*$|;\s*$", re.MULTILINE | re.IGNORECASE)
+# Prompts that explicitly ask for English output (translation, spelling) are exempt from the CJK-ratio check.
+ENGLISH_EXPECTED = re.compile(r"英文|英语|english|翻译|单词|拼写|缩写", re.IGNORECASE)
+
+
+def normalize_text(value, fold_case=True):
+    text = " ".join(unicodedata.normalize("NFKC", value).split())
+    return text.casefold() if fold_case else text
+
+
+def cjk_ratio(text):
+    cjk, latin = len(CJK.findall(text)), len(LATIN.findall(text))
+    return None if cjk + latin < 20 else cjk / (cjk + latin)
 
 
 def strict_pairs(pairs):
@@ -34,7 +54,7 @@ def load_rules(path: Path | None = None):
     rules = json.loads((path or Path(__file__).with_name("default_rules.json")).read_text(encoding="utf-8"), object_pairs_hook=strict_pairs, parse_constant=reject_constant)
     if not isinstance(rules, dict) or not isinstance(rules.get("fields"), dict) or not rules["fields"]:
         raise ValueError("Rules require a non-empty fields object")
-    allowed = {"fields", "duplicate_key_fields", "content_fields", "normalize_content"}
+    allowed = {"fields", "duplicate_key_fields", "content_fields", "normalize_content", "content_checks"}
     if set(rules) - allowed:
         raise ValueError(f"Unknown rule options: {sorted(set(rules) - allowed)}")
     for field, rule in rules["fields"].items():
@@ -42,10 +62,12 @@ def load_rules(path: Path | None = None):
             raise ValueError("Each field needs a dotted path and rule object")
         if rule.get("type") not in TYPES:
             raise ValueError(f"Unsupported type for {field}")
-        if set(rule) - {"type", "required", "min_length", "max_length", "enum"}:
+        if set(rule) - {"type", "required", "min_length", "max_length", "enum", "allow_blank"}:
             raise ValueError(f"Unknown field rule for {field}")
         if "required" in rule and not isinstance(rule["required"], bool):
             raise ValueError(f"required must be boolean: {field}")
+        if "allow_blank" in rule and (not isinstance(rule["allow_blank"], bool) or rule["type"] != "string"):
+            raise ValueError(f"allow_blank must be boolean on a string field: {field}")
         for key in ("min_length", "max_length"):
             if key in rule and (type(rule[key]) is not int or rule[key] < 0 or rule["type"] not in {"string", "array"}):
                 raise ValueError(f"Invalid {key}: {field}")
@@ -59,7 +81,58 @@ def load_rules(path: Path | None = None):
             raise ValueError(f"{key} must list distinct configured fields")
     if not isinstance(rules.get("normalize_content", True), bool):
         raise ValueError("normalize_content must be boolean")
+    checks = rules.get("content_checks")
+    if checks is not None:
+        if not isinstance(checks, dict) or set(checks) - CONTENT_CHECK_KEYS:
+            raise ValueError(f"content_checks accepts only {sorted(CONTENT_CHECK_KEYS)}")
+        prompts, response = checks.get("prompt_fields"), checks.get("response_field")
+        if not isinstance(prompts, list) or not prompts or any(not isinstance(p, str) or not p for p in prompts):
+            raise ValueError("content_checks.prompt_fields must be a non-empty list of field paths")
+        if not isinstance(response, str) or not response or response in prompts:
+            raise ValueError("content_checks.response_field must be a field path not listed in prompt_fields")
+        for key in ("conflicting_answer", "echo_response", "ai_boilerplate"):
+            if not isinstance(checks.get(key, True), bool):
+                raise ValueError(f"content_checks.{key} must be boolean")
+        ratio = checks.get("min_cjk_ratio")
+        if ratio is not None and (isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1):
+            raise ValueError("content_checks.min_cjk_ratio must be a number between 0 and 1")
     return rules
+
+
+def content_issues(record, checks, db, file, line, issue):
+    """LLM-data heuristics. They flag rows for human review; they do not prove an answer is wrong."""
+    response = lookup(record, checks["response_field"])
+    if not isinstance(response, str) or not response.strip():
+        return
+    prompt_values = [lookup(record, f) for f in checks["prompt_fields"]]
+    prompt_texts = [v for v in prompt_values if isinstance(v, str) and v.strip()]
+    if not prompt_texts:
+        return
+    field = checks["response_field"]
+    norm_response = normalize_text(response)
+    if checks.get("conflicting_answer", True):
+        fingerprint = digest([normalize_text(v) if isinstance(v, str) else v for v in prompt_values])
+        answer = digest(norm_response)
+        first = db.execute("SELECT file,line,record_hash FROM seen WHERE kind='prompt' AND fingerprint=?", (fingerprint,)).fetchone()
+        if not first:
+            db.execute("INSERT INTO seen VALUES ('prompt',?,?,?,?)", (fingerprint, file, line, answer))
+        elif first[2] != answer:
+            issue("conflicting_answer", field, "Same prompt as an earlier record but a different answer; needs adjudication", first[0], first[1])
+    # Case is kept here: a capitalisation-fix task legitimately returns the input with only case changed.
+    if checks.get("echo_response", True) and any(normalize_text(response, False) == normalize_text(v, False) for v in prompt_texts):
+        issue("echo_response", field, "Answer repeats the prompt or input verbatim")
+    if checks.get("ai_boilerplate", True):
+        match = BOILERPLATE.search(response)
+        if match:
+            issue("ai_boilerplate", field, f"Template phrase: {match.group(0)}")
+    threshold = checks.get("min_cjk_ratio")
+    if threshold is not None:
+        ratio = cjk_ratio(response)
+        # Only a Chinese-only prompt makes a mostly-English answer suspicious; prompts about English text are exempt.
+        prompt_latin = sum(len(LATIN.findall(v)) for v in prompt_texts)
+        english_expected = any(ENGLISH_EXPECTED.search(v) for v in prompt_texts)
+        if ratio is not None and ratio < threshold and prompt_latin < 3 and not english_expected and not CODE_HINT.search(response):
+            issue("low_cjk_ratio", field, f"Chinese prompt but answer is {ratio:.0%} Chinese; possibly untranslated")
 
 
 def lookup(record, path):
@@ -180,6 +253,9 @@ def check(paths: list[Path], output: Path, rules=None, max_line_bytes=4 * 1024 *
                             valid_fields = set()
                             for field, rule in rules["fields"].items():
                                 value = lookup(record, field)
+                                if isinstance(value, str) and not value.strip() and rule.get("allow_blank", False):
+                                    valid_fields.add(field)  # e.g. Alpaca-style "input": "" is a legitimate empty context
+                                    continue
                                 if value is MISSING or value is None or (isinstance(value, str) and not value.strip()):
                                     if rule.get("required", False):
                                         issue("missing_field", field, "Required value is absent, null or blank")
@@ -211,6 +287,8 @@ def check(paths: list[Path], output: Path, rules=None, max_line_bytes=4 * 1024 *
                                     issue(code, ",".join(fields), note + "; later occurrence refers to first occurrence", first[0], first[1])
                                 else:
                                     db.execute("INSERT INTO seen VALUES (?,?,?,?,?)", (kind, fingerprint, file, line, record_hash))
+                            if rules.get("content_checks") and not any(i["code"] == "duplicate_content" for i in issues):
+                                content_issues(record, rules["content_checks"], db, file, line, issue)
                         if issues:
                             counters["problem_lines"] += 1
                             counters["total_issues"] += len(issues)

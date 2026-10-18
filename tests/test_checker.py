@@ -27,6 +27,55 @@ class CheckerTest(unittest.TestCase):
         with (self.out / "issues.csv").open(encoding="utf-8-sig", newline="") as handle:
             return list(csv.DictReader(handle))
 
+    def alpaca_rules(self):
+        return load_rules(Path(__file__).resolve().parents[1] / "examples" / "rules_alpaca_zh.json")
+
+    def test_alpaca_blank_input_allowed_and_conflicting_answer(self):
+        self.write([
+            {"instruction": "解释什么是光合作用", "input": "", "output": "植物利用光能把二氧化碳和水转化为有机物。"},
+            {"instruction": "解释什么是光合作用", "input": "", "output": "光合作用是绿色植物制造养分的过程。"},
+            {"instruction": "判断情感倾向", "input": "今天很开心", "output": "积极"},
+            {"instruction": "判断情感倾向", "input": "今天很难过", "output": "消极"},
+        ])
+        s = check([self.source], self.out, self.alpaca_rules())
+        self.assertEqual(s["issues_by_code"], {"conflicting_answer": 1})
+        row = self.issues()[0]
+        self.assertEqual((row["line"], row["first_line"]), ("2", "1"))
+
+    def test_exact_duplicate_is_not_double_counted_as_conflict(self):
+        record = {"instruction": "解释什么是光合作用", "input": "", "output": "植物利用光能制造有机物。"}
+        self.write([record, record])
+        s = check([self.source], self.out, self.alpaca_rules())
+        self.assertEqual(s["issues_by_code"], {"duplicate_content": 1})
+
+    def test_echo_boilerplate_and_untranslated_answer(self):
+        english = "Photosynthesis is the process by which green plants convert light into chemical energy."
+        self.write([
+            {"instruction": "改正下面句子的语病", "input": "我骑了自行车。", "output": "我骑了自行车。"},
+            {"instruction": "你喜欢吃什么", "input": "", "output": "作为一个AI语言模型，我没有口味偏好。"},
+            {"instruction": "解释光合作用", "input": "", "output": english},
+            {"instruction": "把这句话翻译成英文：植物进行光合作用", "input": "", "output": english},
+            {"instruction": "用 Python 写一个加法函数", "input": "", "output": "def add(a, b):\n    return a + b  # simple addition helper"},
+            {"instruction": "改正句子中的大小写", "input": "the capital of australia is canberra.", "output": "The capital of Australia is Canberra."},
+        ])
+        rules = self.alpaca_rules()
+        rules["content_checks"]["min_cjk_ratio"] = 0.2
+        s = check([self.source], self.out, rules)
+        self.assertEqual(s["issues_by_code"], {"ai_boilerplate": 1, "echo_response": 1, "low_cjk_ratio": 1})
+        self.assertEqual(s["problem_lines"], 3)
+
+    def test_content_checks_validation(self):
+        rules = self.alpaca_rules()
+        rules["content_checks"]["min_cjk_ratio"] = 2
+        path = self.root / "bad_rules.json"
+        path.write_text(json.dumps(rules), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            load_rules(path)
+        rules["content_checks"] = {"prompt_fields": ["output"], "response_field": "output"}
+        path.write_text(json.dumps(rules), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            load_rules(path)
+
     def test_valid_input_and_no_mutation(self):
         self.write([self.row()])
         before = hashlib.sha256(self.source.read_bytes()).hexdigest()

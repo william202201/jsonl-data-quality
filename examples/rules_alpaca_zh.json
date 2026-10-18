@@ -1,0 +1,37 @@
+{
+  "fields": {
+    "instruction": {
+      "type": "string",
+      "required": true,
+      "min_length": 4,
+      "max_length": 2000
+    },
+    "input": {
+      "type": "string",
+      "required": false,
+      "allow_blank": true,
+      "max_length": 4000
+    },
+    "output": {
+      "type": "string",
+      "required": true,
+      "max_length": 4000
+    }
+  },
+  "content_fields": [
+    "instruction",
+    "input",
+    "output"
+  ],
+  "normalize_content": true,
+  "content_checks": {
+    "prompt_fields": [
+      "instruction",
+      "input"
+    ],
+    "response_field": "output",
+    "conflicting_answer": true,
+    "echo_response": true,
+    "ai_boilerplate": true
+  }
+}
